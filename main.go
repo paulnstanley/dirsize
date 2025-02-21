@@ -9,10 +9,15 @@ import (
 )
 
 // Dirsize processes a user provided, space-separated list of directories with optional flags and returns a list of their filesizes.
+// TODO if I was working more on this:  unit tests, make some stylistic improvements, aim to reduce complexity, define more error types and cleaner error states
+
+var (
+	errorIncompleteArguments = fmt.Errorf("missing arguments")
+)
 
 func main() {
-	if humanReadable, recursive, paths, err := processInput(os.Args); err != nil {
-		fmt.Println("Error:", err)
+	if humanReadable, recursive, paths, err := processInput(os.Args); err == errorIncompleteArguments {
+		printHelp()
 		os.Exit(1)
 	} else if sizeList, err := processPaths(humanReadable, recursive, paths); err != nil {
 		fmt.Println("Error:", err)
@@ -28,15 +33,9 @@ func main() {
 }
 
 func processInput(input []string) (humanReadable, recursive bool, paths []string, err error) {
-	// Ensure at least one argument has been provided
+	// Ensure at least one argument has been provided, support a help flag
 	if len(input) < 2 || input[1] == "--help" {
-		fmt.Println("\n--- Dirsize Help ---\n")
-		fmt.Println("Dirsize accepts a list of paths to directories and returns their size.")
-		fmt.Println("Example usage: dirsize --flag1 --flag2 path1 path2 pathN ...")
-		fmt.Println("\nOptional Flags:\n")
-		fmt.Println("'--recursive' flag will obtain the total for all directories within the provided parent directory.")
-		fmt.Println("'--human' flag will return human-readable results instead of a byte count.")
-		return false, false, []string{}, fmt.Errorf("incomplete command")
+		return false, false, []string{}, errorIncompleteArguments
 	}
 
 	for _, arg := range input[1:] {
@@ -89,28 +88,18 @@ func formatSize(size int64) string {
 // getDirSize does the heavy lifting for each path.
 // If recursive is false, then it'll only process the top-level directory.  It's false by default unless the user toggles it on via input flag.
 func getDirSize(recursive bool, path string) (int64, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0, fmt.Errorf("failed to stat: %v", err)
-	}
-
-	// Ensure the path is a directory
-	if !info.IsDir() {
-		return 0, fmt.Errorf("must provide a valid directory path")
-	}
-
 	var totalSize int64
-
-	// Walk the directory and process entries
-	err = filepath.WalkDir(path, func(entryPath string, d os.DirEntry, err error) error {
+	if info, err := os.Stat(path); err != nil {
+		return 0, fmt.Errorf("failed to stat: %v", err)
+	} else if !info.IsDir() { // Don't run on filenames, only directories
+		return 0, fmt.Errorf("must provide a valid directory path")
+	} else if err = filepath.WalkDir(path, func(entryPath string, d os.DirEntry, err error) error {
 		return processEntry(entryPath, d, path, recursive, &totalSize)
-	})
-
-	if err != nil {
+	}); err != nil {
 		return 0, fmt.Errorf("error walking directory: %v", err)
+	} else {
+		return totalSize, nil
 	}
-
-	return totalSize, nil
 }
 
 // processEntry processes each directory entry and updates totalSize accordingly
@@ -129,9 +118,26 @@ func processEntry(entryPath string, d os.DirEntry, rootPath string, recursive bo
 // validateEntry checks if an entry should be processed or skipped
 func validateEntry(entryPath string, d os.DirEntry, rootPath string, recursive bool) error {
 	if entryPath == rootPath {
-		return nil // Skip processing the root directory itself
+		return nil // Skip processing the root directory
 	} else if d.IsDir() && !recursive {
-		return filepath.SkipDir // Skip subdirectories if not recursive
+		return filepath.SkipDir // Skip subdirectories if not a recursive request
 	}
-	return nil // Entry is valid
+	return nil
+}
+
+func printHelp() {
+	fmt.Println(`
+--- Dirsize Help ---
+Dirsize accepts a list of directory paths and returns their size.
+
+Usage: dirsize [options] <dir1> <dir2> ...
+
+Options:
+  --help        Display this help content.
+  --recursive   Include subdirectories in the total size.
+  --human       Display sizes in human-readable format (KB, MB, GB).
+
+Example:
+  dirsize --human --recursive mydir anotherdir
+`)
 }
